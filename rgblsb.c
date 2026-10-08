@@ -1,7 +1,7 @@
+#define _FILE_OFFSET_BITS 64
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#define _FILE_OFFSET_BITS 64
 
 #define die(...) {fprintf(stderr, __VA_ARGS__); exit(1);}
 
@@ -22,12 +22,16 @@ int recover_byte(FILE *in, char *out)
     return 0;
 }
 
-int inject_byte(FILE *in, FILE *payload, char *out, int *trail)
+int inject_byte(FILE *in, FILE *payload, char *out, int *trail, int byte)
 {
     int buf, pl;
-    pl = fgetc(payload);
-    if (pl == EOF)
-        return 1;
+    if (payload) {
+        pl = fgetc(payload);
+        if (pl == EOF)
+            return 1;
+    }
+    else
+        pl = byte;
     for (int i = 0; i < 8; ++i) {
         buf = fgetc(in);
         if (buf == EOF) {
@@ -41,7 +45,8 @@ int inject_byte(FILE *in, FILE *payload, char *out, int *trail)
     return 0;
 }
 
-/* simple PPM detection, assuming LF separator */
+/* simple PPM detection, assuming LF separator between different fields
+and whitespace (0x20) separator between dimensions, so 3 "lines" essentially */
 void ppm_help(FILE *in, FILE *out)
 {
     char sbuf[256] = { 0 };
@@ -57,11 +62,39 @@ void ppm_help(FILE *in, FILE *out)
 
 void usage(void)
 {
-    die("usage: program <d|e> <input> [payload] <output> [-f]\n"
+    die("usage: program <d|e> input [payload] output [-f] [-s]\n"
         "       input can be raw RGB file or PPM file\n"
         "       payload is required when in e mode\n"
         "       -f for overwrite the existing output file\n"
-        "       args are required to be in the exact order\n");
+        "       -s for prepend payload size in message or stop there in d mode\n"
+        "       files are required to be in the exact place and order\n"
+        "       flags can be in different order\n");
+}
+
+int got_flag(char *flag, int argc, char *argv[])
+{
+    for (int i = 0; i < argc; ++i) {
+        if (!strcmp(argv[i], flag))
+            return 1;
+    }
+    return 0;
+}
+#define gotflag(x) got_flag(x, argc, argv)
+
+/* enough size, it's unlikely you need huge payload right? */
+unsigned int get_file_size(char *path)
+{
+    FILE *f = fopen(path, "rb");
+    fseek(f, 0, SEEK_END);
+    off_t s = ftell(f);
+    fclose(f);
+    return (unsigned int)s;
+}
+
+void write_byte_count(char *buf, FILE *out, int count)
+{
+    for (int i = 0; i < count; ++i)
+        fputc(buf[i], out);
 }
 
 int main(int argc, char *argv[])
@@ -76,7 +109,7 @@ int main(int argc, char *argv[])
         if (!input)
             die("error: can't open input file\n");
         if ((output = fopen(argv[3], "rb"))) {
-            if (argc == 5 && !strcmp(argv[4], "-f"))
+            if (gotflag("-f"))
                 fclose(output);
             else
                 die("error: output file exists\n");
@@ -84,8 +117,18 @@ int main(int argc, char *argv[])
         output = fopen(argv[3], "wb");
         ppm_help(input, NULL);
         char buf = 0;
-        while (!recover_byte(input, &buf))
+        unsigned int fs = 0;
+        if (gotflag("-s")) {
+            for (int i = 0; i < 4; ++i) {
+                recover_byte(input, &buf);
+                fs |= ((unsigned int)buf) << (8 * i);
+            }
+        }
+        while (!recover_byte(input, &buf)) {
             fputc(buf, output);
+            if (fs && ftell(output) >= fs)
+                break;
+        }
         fclose(input);
         fclose(output);
     }
@@ -100,7 +143,7 @@ int main(int argc, char *argv[])
         if (!payload)
             die("error: can't open payload file\n");
         if ((output = fopen(argv[4], "rb"))) {
-            if (argc == 6 && !strcmp(argv[5], "-f"))
+            if (gotflag("-f"))
                 fclose(output);
             else
                 die("error: output file exists\n");
@@ -109,23 +152,30 @@ int main(int argc, char *argv[])
         ppm_help(input, output);
         char buf[8] = { 0 };
         int ret, trail = 0;
-        while (!(ret = inject_byte(input, payload, buf, &trail))) {
-            for (int i = 0; i < 8; ++i)
-                fputc(buf[i], output);
+        if (gotflag("-s")) {
+            unsigned int fs = get_file_size(argv[3]);
+            for (int i = 0; i < 4; ++i) {
+                inject_byte(input, NULL, buf, &trail, fs >> (8 * i));
+                write_byte_count(buf, output, 8);
+            }
+        }
+        while (!(ret = inject_byte(input, payload, buf, &trail, 0))) {
+            write_byte_count(buf, output, 8);
         }
         if (ret == 1) {
             #define CHUNK_SIZE 32768
             char *chunk = malloc(CHUNK_SIZE);
             size_t read;
             while ((read = fread(chunk, 1, CHUNK_SIZE, input))) {
-                for (size_t i = 0; i < read; ++i)
-                    chunk[i] = (chunk[i] >> 1) << 1;
+                if (!gotflag("-s")) {
+                    for (size_t i = 0; i < read; ++i)
+                        chunk[i] = (chunk[i] >> 1) << 1;
+                }
                 fwrite(chunk, 1, read, output);
             }
         }
         else if (ret == 2) {
-            for (int i = 0; i < trail; ++i)
-                fputc(buf[i], output);
+            write_byte_count(buf, output, trail);
             if (!feof(payload))
                 fprintf(stderr, "warning: input capacity smaller than payload\n");
         }
