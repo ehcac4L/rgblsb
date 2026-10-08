@@ -21,7 +21,7 @@ void inject_bytes(uint8_t *in, uint8_t *payload, uint8_t *out, size_t pl_len)
 {
     for (int i = 0; i < pl_len; ++i) {
         for (int j = 0; j < 8; ++j) {
-            out[i*8+j] = (in[i*8+j] | 0x1) & ((payload[i] >> (7-j)) & 0x1);
+            out[i*8+j] = (in[i*8+j] & 0xFE) | ((payload[i] >> (7-j)) & 0x1);
         }
     }
 }
