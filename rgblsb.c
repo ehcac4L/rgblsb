@@ -5,7 +5,7 @@
 #include <string.h>
 
 #define die(...) do {fprintf(stderr, __VA_ARGS__); exit(1);} while(0)
-#define CHUNK_SIZE_IN_PAYLOAD_BYTES 32768
+#define CHUNK_SIZE_IN_PAYLOAD_BYTES (128*1024)
 
 void recover_bytes(uint8_t *in, uint8_t *out, size_t pl_len)
 {
@@ -16,23 +16,6 @@ void recover_bytes(uint8_t *in, uint8_t *out, size_t pl_len)
     }
 }
 
-int recover_byte(FILE *in, uint8_t *out)
-{
-    int buf;
-    uint8_t rec = 0;
-    for (int i = 7; i >= 0; --i) {
-        buf = fgetc(in);
-        if (buf == EOF) {
-            *out = rec;
-            return EOF;
-        }
-        buf &= 1;
-        rec |= (buf << i);
-    }
-    *out = rec;
-    return 0;
-}
-
 void inject_bytes(uint8_t *in, uint8_t *payload, uint8_t *out, size_t pl_len)
 {
     for (int i = 0; i < pl_len; ++i) {
@@ -40,29 +23,6 @@ void inject_bytes(uint8_t *in, uint8_t *payload, uint8_t *out, size_t pl_len)
             out[i*8+j] = (in[i*8+j] | 0x1) & ((payload[i] >> (7-j)) & 0x1);
         }
     }
-}
-
-int inject_byte(FILE *in, FILE *payload, uint8_t *out, int *trail, int byte)
-{
-    int buf, pl;
-    if (payload) {
-        pl = fgetc(payload);
-        if (pl == EOF)
-            return 1;
-    }
-    else
-        pl = byte;
-    for (int i = 0; i < 8; ++i) {
-        buf = fgetc(in);
-        if (buf == EOF) {
-            *trail = i;
-            return 2;
-        }
-        buf = (buf >> 1) << 1;
-        buf |= (pl >> (7 - i)) & 1;
-        out[i] = buf;
-    }
-    return 0;
 }
 
 /* simple PPM detection, assuming LF separator between different fields
@@ -117,12 +77,6 @@ uint32_t get_file_size(char *path)
         return 0;
 }
 
-void write_byte_count(uint8_t *buf, FILE *out, int count)
-{
-    for (int i = 0; i < count; ++i)
-        fputc(buf[i], out);
-}
-
 int main(int argc, char *argv[])
 {
     if (argc < 2)
@@ -143,14 +97,14 @@ int main(int argc, char *argv[])
         output = fopen(argv[3], "wb");
         ppm_help(input, NULL);
         uint8_t *lbuf = malloc(CHUNK_SIZE_IN_PAYLOAD_BYTES * 8);
-        uint8_t *rbuf = malloc(CHUNK_SIZE_IN_PAYLOAD_BYTES);
+        uint8_t *rbuf = calloc(CHUNK_SIZE_IN_PAYLOAD_BYTES, 1);
         uint32_t target_bytes = 0, written = 0;
         size_t read = 0;
         if (gotflag("-s")) {
-            uint8_t buf = 0;
+            fread(lbuf, 1, 4*8, input);
+            recover_bytes(lbuf, rbuf, 4);
             for (int i = 0; i < 4; ++i) {
-                recover_byte(input, &buf);
-                target_bytes |= buf << (8 * i);
+                target_bytes |= rbuf[i] << (8 * i);
             }
         }
         for (;;) {
@@ -165,6 +119,8 @@ int main(int argc, char *argv[])
             if (target_bytes && written >= target_bytes)
                 break;
         }
+        if (written < target_bytes)
+            fprintf(stderr, "warning: payload incomplete\n");
         free(lbuf);
         free(rbuf);
         fclose(input);
@@ -190,18 +146,19 @@ int main(int argc, char *argv[])
         ppm_help(input, output);
         uint8_t *origbuf = malloc(CHUNK_SIZE_IN_PAYLOAD_BYTES * 8);
         uint8_t *pbuf = malloc(CHUNK_SIZE_IN_PAYLOAD_BYTES);
-        uint8_t *lbuf = malloc(CHUNK_SIZE_IN_PAYLOAD_BYTES * 8);
+        uint8_t *lbuf = calloc(CHUNK_SIZE_IN_PAYLOAD_BYTES * 8, 1);
         size_t orig_read = 0, pl_read = 0;
-        uint8_t buf[8] = { 0 };
-        int ret, trail = 0;
+        int ret = 0;
         if (gotflag("-s")) {
             uint32_t fs = get_file_size(argv[3]);
             if (!fs)
                 die("error: payload size problem or something\n");
             for (int i = 0; i < 4; ++i) {
-                inject_byte(input, NULL, buf, &trail, fs >> (8 * i));
-                write_byte_count(buf, output, 8);
+                pbuf[i] = fs >> (8 * i);
             }
+            fread(origbuf, 1, 4*8, input);
+            inject_bytes(origbuf, pbuf, lbuf, 4);
+            fwrite(lbuf, 1, 4*8, output);
         }
         for (;;) {
             memset(lbuf, 0, CHUNK_SIZE_IN_PAYLOAD_BYTES * 8);
@@ -213,6 +170,8 @@ int main(int argc, char *argv[])
             (orig_read != CHUNK_SIZE_IN_PAYLOAD_BYTES * 8)) {
                 if (pl_read < orig_read / 8)
                     ret = 1;
+                if (orig_read < pl_read * 8)
+                    fprintf(stderr, "warning: input capacity smaller than payload\n");
                 break;
             }
         }
@@ -222,7 +181,7 @@ int main(int argc, char *argv[])
             while ((read = fread(chunk, 1, CHUNK_SIZE_IN_PAYLOAD_BYTES, input))) {
                 if (!gotflag("-s")) {
                     for (size_t i = 0; i < read; ++i)
-                        chunk[i] = (chunk[i] >> 1) << 1;
+                        chunk[i] = chunk[i] & 0xFE;
                 }
                 fwrite(chunk, 1, read, output);
             }
