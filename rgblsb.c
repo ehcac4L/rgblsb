@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#define die(...) {fprintf(stderr, __VA_ARGS__); exit(1);}
+#define die(...) do {fprintf(stderr, __VA_ARGS__); exit(1);} while(0)
 
 int recover_byte(FILE *in, uint8_t *out)
 {
@@ -59,6 +59,9 @@ void ppm_help(FILE *in, FILE *out)
         fgets(sbuf, 256, in);
         if (out) fputs(sbuf, out);
     }
+    else {
+        rewind(in);
+    }
 }
 
 void usage(void)
@@ -89,7 +92,10 @@ uint32_t get_file_size(char *path)
     fseek(f, 0, SEEK_END);
     off_t s = ftell(f);
     fclose(f);
-    return (uint32_t)s;
+    if (s > 0 && s < (uint32_t)-1)
+        return (uint32_t)s;
+    else
+        return 0;
 }
 
 void write_byte_count(uint8_t *buf, FILE *out, int count)
@@ -136,7 +142,7 @@ int main(int argc, char *argv[])
     }
     else if (*argv[1] == 'e') {
         if (argc < 5)
-            die("error: not enough args\n")
+            die("error: not enough args\n");
         FILE *input, *output, *payload;
         input = fopen(argv[2], "rb");
         if (!input)
@@ -155,7 +161,9 @@ int main(int argc, char *argv[])
         uint8_t buf[8] = { 0 };
         int ret, trail = 0;
         if (gotflag("-s")) {
-            unsigned int fs = get_file_size(argv[3]);
+            uint32_t fs = get_file_size(argv[3]);
+            if (!fs)
+                die("error: payload size problem or something\n");
             for (int i = 0; i < 4; ++i) {
                 inject_byte(input, NULL, buf, &trail, fs >> (8 * i));
                 write_byte_count(buf, output, 8);
