@@ -16,6 +16,7 @@ void recover_bytes(uint8_t *in, uint8_t *out, size_t pl_len)
     }
 }
 
+/* now the in and out pointer passed in calling is the same, but it's ok to keep it */
 void inject_bytes(uint8_t *in, uint8_t *payload, uint8_t *out, size_t pl_len)
 {
     for (int i = 0; i < pl_len; ++i) {
@@ -81,7 +82,14 @@ int main(int argc, char *argv[])
 {
     if (argc < 2)
         usage();
+
+    uint32_t lbufsize = CHUNK_SIZE_IN_PAYLOAD_BYTES * 8;
+    uint32_t pbufsize = CHUNK_SIZE_IN_PAYLOAD_BYTES;
+    uint8_t *lbuf = calloc(lbufsize, 1);
+    uint8_t *pbuf = calloc(pbufsize, 1);
+
     if (*argv[1] == 'd') {
+        /* chore */
         if (argc < 4)
             die("error: not enough args\n");
         FILE *input, *output;
@@ -96,37 +104,38 @@ int main(int argc, char *argv[])
         }
         output = fopen(argv[3], "wb");
         ppm_help(input, NULL);
-        uint8_t *lbuf = malloc(CHUNK_SIZE_IN_PAYLOAD_BYTES * 8);
-        uint8_t *rbuf = calloc(CHUNK_SIZE_IN_PAYLOAD_BYTES, 1);
+
+        /* real deal */
         uint32_t target_bytes = 0, written = 0;
         size_t read = 0;
         if (gotflag("-s")) {
             fread(lbuf, 1, 4*8, input);
-            recover_bytes(lbuf, rbuf, 4);
+            recover_bytes(lbuf, pbuf, 4);
             for (int i = 0; i < 4; ++i) {
-                target_bytes |= rbuf[i] << (8 * i);
+                target_bytes |= pbuf[i] << (8 * i);
             }
         }
         for (;;) {
-            memset(rbuf, 0, CHUNK_SIZE_IN_PAYLOAD_BYTES);
-            read = fread(lbuf, 1, CHUNK_SIZE_IN_PAYLOAD_BYTES * 8, input);
+            memset(pbuf, 0, pbufsize);
+            read = fread(lbuf, 1, lbufsize, input);
             if (target_bytes && written + read / 8 >= target_bytes)
                 read = (target_bytes - written) * 8;
-            recover_bytes(lbuf, rbuf, read / 8);
-            written += fwrite(rbuf, 1, read / 8, output);
-            if (read != CHUNK_SIZE_IN_PAYLOAD_BYTES * 8)
+            recover_bytes(lbuf, pbuf, read / 8);
+            written += fwrite(pbuf, 1, read / 8, output);
+            if (read != lbufsize)
                 break;
             if (target_bytes && written >= target_bytes)
                 break;
         }
         if (written < target_bytes)
             fprintf(stderr, "warning: payload incomplete\n");
-        free(lbuf);
-        free(rbuf);
         fclose(input);
         fclose(output);
     }
+
+
     else if (*argv[1] == 'e') {
+        /* chore */
         if (argc < 5)
             die("error: not enough args\n");
         FILE *input, *output, *payload;
@@ -144,52 +153,46 @@ int main(int argc, char *argv[])
         }
         output = fopen(argv[4], "wb");
         ppm_help(input, output);
-        uint8_t *origbuf = malloc(CHUNK_SIZE_IN_PAYLOAD_BYTES * 8);
-        uint8_t *pbuf = malloc(CHUNK_SIZE_IN_PAYLOAD_BYTES);
-        uint8_t *lbuf = calloc(CHUNK_SIZE_IN_PAYLOAD_BYTES * 8, 1);
+
+        /* real deal */
         size_t orig_read = 0, pl_read = 0;
-        int ret = 0;
-        if (gotflag("-s")) {
+        int ret = 0, s_flag = gotflag("-s");
+        if (s_flag) {
             uint32_t fs = get_file_size(argv[3]);
             if (!fs)
                 die("error: payload size problem or something\n");
             for (int i = 0; i < 4; ++i) {
-                pbuf[i] = fs >> (8 * i);
+                pbuf[i] = (fs >> (8 * i)) & 0xFF;
             }
-            fread(origbuf, 1, 4*8, input);
-            inject_bytes(origbuf, pbuf, lbuf, 4);
+            fread(lbuf, 1, 4*8, input);
+            inject_bytes(lbuf, pbuf, lbuf, 4);
             fwrite(lbuf, 1, 4*8, output);
         }
         for (;;) {
-            memset(lbuf, 0, CHUNK_SIZE_IN_PAYLOAD_BYTES * 8);
-            orig_read = fread(origbuf, 1, CHUNK_SIZE_IN_PAYLOAD_BYTES * 8, input);
-            pl_read = fread(pbuf, 1, CHUNK_SIZE_IN_PAYLOAD_BYTES, payload);
-            inject_bytes(origbuf, pbuf, lbuf, pl_read);
+            orig_read = fread(lbuf, 1, lbufsize, input);
+            pl_read = fread(pbuf, 1, pbufsize, payload);
+            if (orig_read < pl_read * 8) {
+                pl_read = orig_read / 8;
+                fprintf(stderr, "warning: input capacity smaller than payload\n");
+            }
+            inject_bytes(lbuf, pbuf, lbuf, pl_read);
             fwrite(lbuf, 1, orig_read, output);
-            if ((pl_read != CHUNK_SIZE_IN_PAYLOAD_BYTES) ||
-            (orig_read != CHUNK_SIZE_IN_PAYLOAD_BYTES * 8)) {
+            if ((pl_read != pbufsize) ||
+            (orig_read != lbufsize)) {
                 if (pl_read < orig_read / 8)
                     ret = 1;
-                if (orig_read < pl_read * 8)
-                    fprintf(stderr, "warning: input capacity smaller than payload\n");
                 break;
             }
         }
         if (ret == 1) {
-            char *chunk = malloc(CHUNK_SIZE_IN_PAYLOAD_BYTES);
-            size_t read;
-            while ((read = fread(chunk, 1, CHUNK_SIZE_IN_PAYLOAD_BYTES, input))) {
-                if (!gotflag("-s")) {
-                    for (size_t i = 0; i < read; ++i)
-                        chunk[i] = chunk[i] & 0xFE;
+            while ((orig_read = fread(lbuf, 1, lbufsize, input))) {
+                if (!s_flag) {
+                    for (size_t i = 0; i < orig_read; ++i)
+                        lbuf[i] = lbuf[i] & 0xFE;
                 }
-                fwrite(chunk, 1, read, output);
+                fwrite(lbuf, 1, orig_read, output);
             }
-            free(chunk);
         }
-        free(origbuf);
-        free(pbuf);
-        free(lbuf);
         fclose(input);
         fclose(payload);
         fclose(output);
@@ -197,5 +200,7 @@ int main(int argc, char *argv[])
     else {
         usage();
     }
+    free(lbuf);
+    free(pbuf);
     return 0;
 }
