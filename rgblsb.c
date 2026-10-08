@@ -1,14 +1,15 @@
 #define _FILE_OFFSET_BITS 64
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 
 #define die(...) {fprintf(stderr, __VA_ARGS__); exit(1);}
 
-int recover_byte(FILE *in, char *out)
+int recover_byte(FILE *in, uint8_t *out)
 {
     int buf;
-    char rec = 0;
+    uint8_t rec = 0;
     for (int i = 7; i >= 0; --i) {
         buf = fgetc(in);
         if (buf == EOF) {
@@ -22,7 +23,7 @@ int recover_byte(FILE *in, char *out)
     return 0;
 }
 
-int inject_byte(FILE *in, FILE *payload, char *out, int *trail, int byte)
+int inject_byte(FILE *in, FILE *payload, uint8_t *out, int *trail, int byte)
 {
     int buf, pl;
     if (payload) {
@@ -82,16 +83,16 @@ int got_flag(char *flag, int argc, char *argv[])
 #define gotflag(x) got_flag(x, argc, argv)
 
 /* enough size, it's unlikely you need huge payload right? */
-unsigned int get_file_size(char *path)
+uint32_t get_file_size(char *path)
 {
     FILE *f = fopen(path, "rb");
     fseek(f, 0, SEEK_END);
     off_t s = ftell(f);
     fclose(f);
-    return (unsigned int)s;
+    return (uint32_t)s;
 }
 
-void write_byte_count(char *buf, FILE *out, int count)
+void write_byte_count(uint8_t *buf, FILE *out, int count)
 {
     for (int i = 0; i < count; ++i)
         fputc(buf[i], out);
@@ -116,17 +117,18 @@ int main(int argc, char *argv[])
         }
         output = fopen(argv[3], "wb");
         ppm_help(input, NULL);
-        char buf = 0;
-        unsigned int fs = 0;
+        uint8_t buf = 0;
+        uint32_t target_bytes = 0, written = 0;
         if (gotflag("-s")) {
             for (int i = 0; i < 4; ++i) {
                 recover_byte(input, &buf);
-                fs |= ((unsigned int)buf) << (8 * i);
+                target_bytes |= buf << (8 * i);
             }
         }
         while (!recover_byte(input, &buf)) {
             fputc(buf, output);
-            if (fs && ftell(output) >= fs)
+            ++written;
+            if (target_bytes && written >= target_bytes)
                 break;
         }
         fclose(input);
@@ -150,7 +152,7 @@ int main(int argc, char *argv[])
         }
         output = fopen(argv[4], "wb");
         ppm_help(input, output);
-        char buf[8] = { 0 };
+        uint8_t buf[8] = { 0 };
         int ret, trail = 0;
         if (gotflag("-s")) {
             unsigned int fs = get_file_size(argv[3]);
