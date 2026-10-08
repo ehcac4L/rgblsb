@@ -52,7 +52,7 @@ void ppm_help(FILE *in, FILE *out)
 {
     char sbuf[256] = { 0 };
     fgets(sbuf, 10, in);
-    if (strcmp(sbuf, "P6")) {
+    if (!strcmp(sbuf, "P6\n")) {
         if (out) fputs(sbuf, out);
         fgets(sbuf, 256, in);
         if (out) fputs(sbuf, out);
