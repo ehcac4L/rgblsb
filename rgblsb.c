@@ -6,24 +6,24 @@
 
 #define die(...) do {fprintf(stderr, __VA_ARGS__); exit(1);} while(0)
 #define CHUNK_SIZE_IN_PAYLOAD_BYTES (128*1024)
-#define WORD_WIDTH 1
-#define BIG_ENDIAN 0
 
-void recover_bytes(uint8_t *in, uint8_t *out, size_t pl_len)
+void recover_bytes(uint8_t *in, uint8_t *out, size_t pl_len, int word_width, int big_endian)
 {
+    int endian_offs = big_endian ? word_width - 1 : 0;
     for (int i = 0; i < pl_len; ++i) {
         for (int j = 0; j < 8; ++j) {
-            out[i] |= (in[(i*8+j)*WORD_WIDTH+BIG_ENDIAN] & 0x1) << (7-j);
+            out[i] |= (in[(i*8+j)*word_width+endian_offs] & 0x1) << (7-j);
         }
     }
 }
 
 /* now the in and out pointer passed in calling is the same, but it's ok to keep it */
-void inject_bytes(uint8_t *in, uint8_t *payload, uint8_t *out, size_t pl_len)
+void inject_bytes(uint8_t *in, uint8_t *payload, uint8_t *out, size_t pl_len, int word_width, int big_endian)
 {
+    int endian_offs = big_endian ? word_width - 1 : 0;
     for (int i = 0; i < pl_len; ++i) {
         for (int j = 0; j < 8; ++j) {
-            out[(i*8+j)*WORD_WIDTH+BIG_ENDIAN] = (in[(i*8+j)*WORD_WIDTH+BIG_ENDIAN] & 0xFE) | ((payload[i] >> (7-j)) & 0x1);
+            out[(i*8+j)*word_width+endian_offs] = (in[(i*8+j)*word_width+endian_offs] & 0xFE) | ((payload[i] >> (7-j)) & 0x1);
         }
     }
 }
@@ -48,24 +48,32 @@ void ppm_help(FILE *in, FILE *out)
 
 void usage(void)
 {
-    die("usage: program <d|e> input [payload] output [-f] [-s]\n"
+    die("usage: program <d|e> input [payload] output [-f] [-s] [-wn] [-le|be]\n"
         "       input can be raw RGB file or PPM file\n"
         "       payload is required when in e mode\n"
         "       -f for overwrite the existing output file\n"
-        "       -s for prepend payload size in message or stop there in d mode\n"
+        "       -s for prepend payload size in message or stop there in d mode, default off\n"
+        "       -w folllowed by number without space for word width, multiple of 8, default 1\n"
+        "       -le or -be for endian, default le (no effect for 8bit)\n"
         "       files are required to be in the exact place and order\n"
         "       flags can be in different order\n");
 }
 
-int got_flag(char *flag, int argc, char *argv[])
+int get_flag(char *flag, int n, int argc, char *argv[])
 {
-    for (int i = 0; i < argc; ++i) {
+    for (int i = 1; i < argc; ++i) {
+        if (n) {
+            if (!strncmp(argv[i], flag, n))
+                return i;
+        }
+        else {
         if (!strcmp(argv[i], flag))
-            return 1;
+            return i;
+        }
     }
     return 0;
 }
-#define gotflag(x) got_flag(x, argc, argv)
+#define getflag(x, y) get_flag(x, y, argc, argv)
 
 /* enough size, it's unlikely you need huge payload right? */
 uint32_t get_file_size(char *path)
@@ -85,7 +93,22 @@ int main(int argc, char *argv[])
     if (argc < 2)
         usage();
 
-    uint32_t lbufsize = CHUNK_SIZE_IN_PAYLOAD_BYTES * 8 * WORD_WIDTH;
+    int word_width = 1, big_endian = 0;
+    int tmp, tmp2;
+    if ((tmp = getflag("-w", 2))) {
+        tmp2 = strlen(argv[tmp]);
+        if (tmp2 > 2 && tmp2 < 10) {
+            word_width = strtoul(argv[tmp]+2, NULL, 10);
+        }
+    }
+    if (getflag("-be", 0)) {
+        big_endian = 1;
+    }
+    if (getflag("-le", 0)) {
+        big_endian = 0;
+    }
+
+    uint32_t lbufsize = CHUNK_SIZE_IN_PAYLOAD_BYTES * 8 * word_width;
     uint32_t pbufsize = CHUNK_SIZE_IN_PAYLOAD_BYTES;
     uint8_t *lbuf = calloc(lbufsize, 1);
     uint8_t *pbuf = calloc(pbufsize, 1);
@@ -99,7 +122,7 @@ int main(int argc, char *argv[])
         if (!input)
             die("error: can't open input file\n");
         if ((output = fopen(argv[3], "rb"))) {
-            if (gotflag("-f"))
+            if (getflag("-f", 0))
                 fclose(output);
             else
                 die("error: output file exists\n");
@@ -110,9 +133,9 @@ int main(int argc, char *argv[])
         /* real deal */
         uint32_t target_bytes = 0, written = 0;
         size_t read = 0;
-        if (gotflag("-s")) {
-            fread(lbuf, 1, 4*(8*WORD_WIDTH), input);
-            recover_bytes(lbuf, pbuf, 4);
+        if (getflag("-s", 0)) {
+            fread(lbuf, 1, 4*(8*word_width), input);
+            recover_bytes(lbuf, pbuf, 4, word_width, big_endian);
             for (int i = 0; i < 4; ++i) {
                 target_bytes |= pbuf[i] << (8 * i);
             }
@@ -120,10 +143,10 @@ int main(int argc, char *argv[])
         for (;;) {
             memset(pbuf, 0, pbufsize);
             read = fread(lbuf, 1, lbufsize, input);
-            if (target_bytes && written + read / (8*WORD_WIDTH) >= target_bytes)
-                read = (target_bytes - written) * (8*WORD_WIDTH);
-            recover_bytes(lbuf, pbuf, read / (8*WORD_WIDTH));
-            written += fwrite(pbuf, 1, read / (8*WORD_WIDTH), output);
+            if (target_bytes && written + read / (8*word_width) >= target_bytes)
+                read = (target_bytes - written) * (8*word_width);
+            recover_bytes(lbuf, pbuf, read / (8*word_width), word_width, big_endian);
+            written += fwrite(pbuf, 1, read / (8*word_width), output);
             if (read != lbufsize)
                 break;
             if (target_bytes && written >= target_bytes)
@@ -148,7 +171,7 @@ int main(int argc, char *argv[])
         if (!payload)
             die("error: can't open payload file\n");
         if ((output = fopen(argv[4], "rb"))) {
-            if (gotflag("-f"))
+            if (getflag("-f", 0))
                 fclose(output);
             else
                 die("error: output file exists\n");
@@ -158,7 +181,7 @@ int main(int argc, char *argv[])
 
         /* real deal */
         size_t orig_read = 0, pl_read = 0;
-        int ret = 0, s_flag = gotflag("-s");
+        int ret = 0, s_flag = getflag("-s", 0);
         if (s_flag) {
             uint32_t fs = get_file_size(argv[3]);
             if (!fs)
@@ -166,22 +189,22 @@ int main(int argc, char *argv[])
             for (int i = 0; i < 4; ++i) {
                 pbuf[i] = (fs >> 8 * i) & 0xFF;
             }
-            fread(lbuf, 1, 4*8*WORD_WIDTH, input);
-            inject_bytes(lbuf, pbuf, lbuf, 4);
-            fwrite(lbuf, 1, 4*8*WORD_WIDTH, output);
+            fread(lbuf, 1, 4*(8*word_width), input);
+            inject_bytes(lbuf, pbuf, lbuf, 4, word_width, big_endian);
+            fwrite(lbuf, 1, 4*(8*word_width), output);
         }
         for (;;) {
             orig_read = fread(lbuf, 1, lbufsize, input);
             pl_read = fread(pbuf, 1, pbufsize, payload);
-            if (orig_read < pl_read * 8*WORD_WIDTH) {
-                pl_read = orig_read / 8*WORD_WIDTH;
+            if (orig_read < pl_read * (8*word_width)) {
+                pl_read = orig_read / (8*word_width);
                 fprintf(stderr, "warning: input capacity smaller than payload\n");
             }
-            inject_bytes(lbuf, pbuf, lbuf, pl_read);
+            inject_bytes(lbuf, pbuf, lbuf, pl_read, word_width, big_endian);
             fwrite(lbuf, 1, orig_read, output);
             if ((pl_read != pbufsize) ||
             (orig_read != lbufsize)) {
-                if (pl_read < orig_read / 8*WORD_WIDTH)
+                if (pl_read < orig_read / (8*word_width))
                     ret = 1;
                 break;
             }
