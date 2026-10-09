@@ -30,7 +30,7 @@ void inject_bytes(uint8_t *in, uint8_t *payload, uint8_t *out, size_t pl_len, in
 
 /* simple PPM detection, assuming LF separator between different fields
 and whitespace (0x20) separator between dimensions, so 3 "lines" essentially */
-void ppm_help(FILE *in, FILE *out)
+int ppm_help(FILE *in, FILE *out)
 {
     char sbuf[256] = { 0 };
     fgets(sbuf, 10, in);
@@ -40,9 +40,11 @@ void ppm_help(FILE *in, FILE *out)
         if (out) fputs(sbuf, out);
         fgets(sbuf, 256, in);
         if (out) fputs(sbuf, out);
+        return strtol(sbuf, NULL, 10);
     }
     else {
         rewind(in);
+        return 0;
     }
 }
 
@@ -97,9 +99,11 @@ int main(int argc, char *argv[])
     int tmp, tmp2;
     if ((tmp = getflag("-w", 2))) {
         tmp2 = strlen(argv[tmp]);
-        if (tmp2 > 2 && tmp2 < 10) {
-            word_width = strtoul(argv[tmp]+2, NULL, 10);
+        if (tmp2 > 2 && tmp2-2 <= 4) {
+            word_width = strtol(argv[tmp]+2, NULL, 10);
         }
+        else
+            die("error: invalid word width specified\n");
     }
     if (getflag("-be", 0)) {
         big_endian = 1;
@@ -128,7 +132,15 @@ int main(int argc, char *argv[])
                 die("error: output file exists\n");
         }
         output = fopen(argv[3], "wb");
-        ppm_help(input, NULL);
+        if (ppm_help(input, NULL) == 65535) {
+            if (!getflag("-w", 2) && !getflag("-le", 0) && !getflag("-be", 0)) {
+                word_width = 2;
+                big_endian = 1;
+                lbufsize = CHUNK_SIZE_IN_PAYLOAD_BYTES * 8 * word_width;
+                free(lbuf);
+                lbuf = calloc(lbufsize, 1);
+            }
+        }
 
         /* real deal */
         uint32_t target_bytes = 0, written = 0;
@@ -177,7 +189,15 @@ int main(int argc, char *argv[])
                 die("error: output file exists\n");
         }
         output = fopen(argv[4], "wb");
-        ppm_help(input, output);
+        if (ppm_help(input, output) == 65535) {
+            if (!getflag("-w", 2) && !getflag("-le", 0) && !getflag("-be", 0)) {
+                word_width = 2;
+                big_endian = 1;
+                lbufsize = CHUNK_SIZE_IN_PAYLOAD_BYTES * 8 * word_width;
+                free(lbuf);
+                lbuf = calloc(lbufsize, 1);
+            }
+        }
 
         /* real deal */
         size_t orig_read = 0, pl_read = 0;
