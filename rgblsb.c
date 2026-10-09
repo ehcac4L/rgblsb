@@ -6,12 +6,14 @@
 
 #define die(...) do {fprintf(stderr, __VA_ARGS__); exit(1);} while(0)
 #define CHUNK_SIZE_IN_PAYLOAD_BYTES (128*1024)
+#define WORD_WIDTH 1
+#define BIG_ENDIAN 0
 
 void recover_bytes(uint8_t *in, uint8_t *out, size_t pl_len)
 {
     for (int i = 0; i < pl_len; ++i) {
         for (int j = 0; j < 8; ++j) {
-            out[i] |= (in[i*8+j] & 0x1) << (7-j);
+            out[i] |= (in[(i*8+j)*WORD_WIDTH+BIG_ENDIAN] & 0x1) << (7-j);
         }
     }
 }
@@ -21,7 +23,7 @@ void inject_bytes(uint8_t *in, uint8_t *payload, uint8_t *out, size_t pl_len)
 {
     for (int i = 0; i < pl_len; ++i) {
         for (int j = 0; j < 8; ++j) {
-            out[i*8+j] = (in[i*8+j] & 0xFE) | ((payload[i] >> (7-j)) & 0x1);
+            out[(i*8+j)*WORD_WIDTH+BIG_ENDIAN] = (in[(i*8+j)*WORD_WIDTH+BIG_ENDIAN] & 0xFE) | ((payload[i] >> (7-j)) & 0x1);
         }
     }
 }
@@ -83,7 +85,7 @@ int main(int argc, char *argv[])
     if (argc < 2)
         usage();
 
-    uint32_t lbufsize = CHUNK_SIZE_IN_PAYLOAD_BYTES * 8;
+    uint32_t lbufsize = CHUNK_SIZE_IN_PAYLOAD_BYTES * 8 * WORD_WIDTH;
     uint32_t pbufsize = CHUNK_SIZE_IN_PAYLOAD_BYTES;
     uint8_t *lbuf = calloc(lbufsize, 1);
     uint8_t *pbuf = calloc(pbufsize, 1);
@@ -109,7 +111,7 @@ int main(int argc, char *argv[])
         uint32_t target_bytes = 0, written = 0;
         size_t read = 0;
         if (gotflag("-s")) {
-            fread(lbuf, 1, 4*8, input);
+            fread(lbuf, 1, 4*(8*WORD_WIDTH), input);
             recover_bytes(lbuf, pbuf, 4);
             for (int i = 0; i < 4; ++i) {
                 target_bytes |= pbuf[i] << (8 * i);
@@ -118,10 +120,10 @@ int main(int argc, char *argv[])
         for (;;) {
             memset(pbuf, 0, pbufsize);
             read = fread(lbuf, 1, lbufsize, input);
-            if (target_bytes && written + read / 8 >= target_bytes)
-                read = (target_bytes - written) * 8;
-            recover_bytes(lbuf, pbuf, read / 8);
-            written += fwrite(pbuf, 1, read / 8, output);
+            if (target_bytes && written + read / (8*WORD_WIDTH) >= target_bytes)
+                read = (target_bytes - written) * (8*WORD_WIDTH);
+            recover_bytes(lbuf, pbuf, read / (8*WORD_WIDTH));
+            written += fwrite(pbuf, 1, read / (8*WORD_WIDTH), output);
             if (read != lbufsize)
                 break;
             if (target_bytes && written >= target_bytes)
@@ -162,24 +164,24 @@ int main(int argc, char *argv[])
             if (!fs)
                 die("error: payload size problem or something\n");
             for (int i = 0; i < 4; ++i) {
-                pbuf[i] = (fs >> (8 * i)) & 0xFF;
+                pbuf[i] = (fs >> 8 * i) & 0xFF;
             }
-            fread(lbuf, 1, 4*8, input);
+            fread(lbuf, 1, 4*8*WORD_WIDTH, input);
             inject_bytes(lbuf, pbuf, lbuf, 4);
-            fwrite(lbuf, 1, 4*8, output);
+            fwrite(lbuf, 1, 4*8*WORD_WIDTH, output);
         }
         for (;;) {
             orig_read = fread(lbuf, 1, lbufsize, input);
             pl_read = fread(pbuf, 1, pbufsize, payload);
-            if (orig_read < pl_read * 8) {
-                pl_read = orig_read / 8;
+            if (orig_read < pl_read * 8*WORD_WIDTH) {
+                pl_read = orig_read / 8*WORD_WIDTH;
                 fprintf(stderr, "warning: input capacity smaller than payload\n");
             }
             inject_bytes(lbuf, pbuf, lbuf, pl_read);
             fwrite(lbuf, 1, orig_read, output);
             if ((pl_read != pbufsize) ||
             (orig_read != lbufsize)) {
-                if (pl_read < orig_read / 8)
+                if (pl_read < orig_read / 8*WORD_WIDTH)
                     ret = 1;
                 break;
             }
