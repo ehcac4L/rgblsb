@@ -1,3 +1,3 @@
 writes bits to lowest bit in bytes, or read from.    
-assuming bitdepth 8.    
-support raw or PPM use whatever tool you like to de/compress.    
+default bitdepth 8, support multiple of 8.    
+support raw and PPM with rgb48be detection, use whatever tool you like to de/compress.    
