@@ -101,6 +101,7 @@ int main(int argc, char *argv[])
         tmp2 = strlen(argv[tmp]);
         if (tmp2 > 2 && tmp2-2 <= 4) {
             word_width = strtol(argv[tmp]+2, NULL, 10);
+            word_width = word_width > 1 ? word_width : 1;
         }
         else
             die("error: invalid word width specified\n");
