@@ -5,13 +5,13 @@
 #include <string.h>
 
 #define die(...) do {fprintf(stderr, __VA_ARGS__); exit(1);} while(0)
-#define CHUNK_SIZE_IN_PAYLOAD_BYTES (128*1024)
+#define CHUNK_SIZE_IN_PAYLOAD_BYTES (128 * (size_t)1024)
 
 void recover_bytes(uint8_t *in, uint8_t *out, size_t pl_len, int word_width, int big_endian)
 {
     int endian_offs = big_endian ? word_width - 1 : 0;
-    for (int i = 0; i < pl_len; ++i) {
-        for (int j = 0; j < 8; ++j) {
+    for (size_t i = 0; i < pl_len; ++i) {
+        for (size_t j = 0; j < 8; ++j) {
             out[i] |= (in[(i*8+j)*word_width+endian_offs] & 0x1) << (7-j);
         }
     }
@@ -21,8 +21,8 @@ void recover_bytes(uint8_t *in, uint8_t *out, size_t pl_len, int word_width, int
 void inject_bytes(uint8_t *in, uint8_t *payload, uint8_t *out, size_t pl_len, int word_width, int big_endian)
 {
     int endian_offs = big_endian ? word_width - 1 : 0;
-    for (int i = 0; i < pl_len; ++i) {
-        for (int j = 0; j < 8; ++j) {
+    for (size_t i = 0; i < pl_len; ++i) {
+        for (size_t j = 0; j < 8; ++j) {
             out[(i*8+j)*word_width+endian_offs] = (in[(i*8+j)*word_width+endian_offs] & 0xFE) | ((payload[i] >> (7-j)) & 0x1);
         }
     }
@@ -113,10 +113,20 @@ int main(int argc, char *argv[])
         big_endian = 0;
     }
 
-    uint32_t lbufsize = CHUNK_SIZE_IN_PAYLOAD_BYTES * 8 * word_width;
-    uint32_t pbufsize = CHUNK_SIZE_IN_PAYLOAD_BYTES;
+    size_t lbufsize = CHUNK_SIZE_IN_PAYLOAD_BYTES * 8 * word_width;
+    size_t pbufsize = CHUNK_SIZE_IN_PAYLOAD_BYTES;
+    if (word_width > 64) {
+        fprintf(stderr, "warning: word width %d will allocate %zu MiB memory, continue? (y/N) ", word_width, (lbufsize + pbufsize)/1024/1024);
+        tmp = getchar();
+        if (tmp != 'y' && tmp != 'Y')
+            exit(1);
+    }
+    if (lbufsize / word_width / 8 != pbufsize)
+        die("error: buffer size mismatch\n");
     uint8_t *lbuf = calloc(lbufsize, 1);
     uint8_t *pbuf = calloc(pbufsize, 1);
+    if (!lbuf || !pbuf)
+        die("error: buffer allocation failed\n");
 
     if (*argv[1] == 'd') {
         /* chore */
