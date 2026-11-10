@@ -26,6 +26,13 @@ void inject_bytes(uint8_t *in, uint8_t *payload, uint8_t *out, size_t pl_len, in
             out[(i*8+j)*word_width+endian_offs] = (in[(i*8+j)*word_width+endian_offs] & 0xFE) | ((payload[i] >> (7-j)) & 0x1);
         }
     }
+    if (pl_len < CHUNK_SIZE_IN_PAYLOAD_BYTES) {
+        for (size_t i = pl_len; i < CHUNK_SIZE_IN_PAYLOAD_BYTES; ++i) {
+            for (size_t j = 0; j < 8; ++j) {
+                out[(i*8+j)*word_width+endian_offs] = in[(i*8+j)*word_width+endian_offs] & 0xFE;
+            }
+        }
+    }
 }
 
 /* simple PPM detection, assuming LF separator between different fields
@@ -253,10 +260,11 @@ int main(int argc, char *argv[])
             }
         }
         if (ret == 1) {
+            int endian_offs = big_endian ? word_width - 1 : 0;
             while ((orig_read = fread(lbuf, 1, lbufsize, input))) {
                 if (!s_flag) {
-                    for (size_t i = 0; i < orig_read; ++i)
-                        lbuf[i] = lbuf[i] & 0xFE;
+                    for (size_t i = 0; i < orig_read; i += word_width)
+                        lbuf[i+endian_offs] = lbuf[i+endian_offs] & 0xFE;
                 }
                 fwrite(lbuf, 1, orig_read, output);
             }
