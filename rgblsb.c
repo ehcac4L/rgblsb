@@ -29,18 +29,30 @@ void inject_bytes(uint8_t *in, uint8_t *payload, uint8_t *out, size_t pl_len, in
 }
 
 /* simple PPM detection, assuming LF separator between different fields
-and whitespace (0x20) separator between dimensions, so 3 "lines" essentially */
+and space (0x20) separator between dimensions, so 3 "lines" essentially,
+now with comment lines support (no longer than 255 bytes...) */
 int ppm_help(FILE *in, FILE *out)
 {
-    char sbuf[256] = { 0 };
+    char sbuf[256] = { 0 }, *endptr;
+    int maxval = 0;
     fgets(sbuf, 10, in);
     if (!strcmp(sbuf, "P6\n")) {
         if (out) fputs(sbuf, out);
-        fgets(sbuf, 256, in);
-        if (out) fputs(sbuf, out);
-        fgets(sbuf, 256, in);
-        if (out) fputs(sbuf, out);
-        return strtol(sbuf, NULL, 10);
+        int iterm = 2; /* terminator */
+        for (int i = 0; i < iterm; ++i) {
+            fgets(sbuf, 256, in);
+            if (out) fputs(sbuf, out);
+            if (sbuf[0] == '#') iterm++;
+            if (iterm > 1000) break; /* arbitrary limit */
+        }
+        maxval = strtol(sbuf, &endptr, 10);
+        if (0 < maxval && maxval < 65536 && *endptr == '\n')
+            return maxval;
+        else {
+            rewind(in);
+            rewind(out);
+            return 0;
+        }
     }
     else {
         rewind(in);
